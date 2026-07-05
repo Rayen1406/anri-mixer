@@ -6,6 +6,28 @@ import type { Group, Participant } from './lib/types'
 
 const DEFAULT_GROUP_COUNT = 4
 
+function LogoMark({ size = 56 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 100 100" role="img" aria-label="ANRI">
+      <defs>
+        <linearGradient id="anriNavy" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stopColor="#111C33" />
+          <stop offset="1" stopColor="#1E3A8A" />
+        </linearGradient>
+      </defs>
+      <rect width="100" height="100" rx="24" fill="url(#anriNavy)" />
+      <g fill="none" stroke="#9FC0FF" strokeWidth="5" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M32 42 Q50 22 68 42" />
+        <path d="M59.1 39.3 L68 42 L66.2 32.9" />
+        <path d="M68 62 Q50 82 32 62" />
+        <path d="M40.9 64.7 L32 62 L33.8 71.1" />
+      </g>
+      <circle cx="32" cy="52" r="12" fill="#3B82F6" />
+      <circle cx="68" cy="52" r="12" fill="#F59E0B" />
+    </svg>
+  )
+}
+
 function App() {
   const [participants, setParticipants] = useState<Participant[]>([])
   const [groups, setGroups] = useState<Group[]>([])
@@ -118,9 +140,15 @@ function App() {
     <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-blue-950 text-slate-100">
       <div className="mx-auto max-w-5xl px-4 py-10">
         <header className="mb-10 text-center">
-          <p className="mb-2 text-sm font-medium uppercase tracking-widest text-blue-400">ANRI</p>
+          <div className="mb-4 flex items-center justify-center gap-3">
+            <LogoMark size={56} />
+            <div className="text-left leading-tight">
+              <p className="text-2xl font-bold tracking-widest text-white">ANRI</p>
+              <p className="text-xs uppercase tracking-widest text-blue-400">group mixer</p>
+            </div>
+          </div>
           <h1 className="text-3xl font-bold tracking-tight text-white sm:text-4xl">
-            Générateur de groupes
+            Mélangeur de groupes
           </h1>
           <p className="mx-auto mt-3 max-w-xl text-slate-400">
             Importez le CSV exporté depuis Google Forms et téléchargez un PDF avec des groupes

@@ -1,13 +1,17 @@
 import { useCallback, useMemo, useState } from 'react'
 import { parseCsvFile } from './lib/csvParser'
-import { createBalancedGroups, suggestGroupCount } from './lib/grouping'
+import { createBalancedGroups } from './lib/grouping'
 import { downloadGroupsPdf } from './lib/pdfExport'
 import type { Group, Participant } from './lib/types'
+
+const DEFAULT_GROUP_COUNT = 4
 
 function App() {
   const [participants, setParticipants] = useState<Participant[]>([])
   const [groups, setGroups] = useState<Group[]>([])
-  const [groupCount, setGroupCount] = useState(4)
+  const [groupCount, setGroupCount] = useState(DEFAULT_GROUP_COUNT)
+  const [draggingId, setDraggingId] = useState<number | null>(null)
+  const [dragOverGroup, setDragOverGroup] = useState<number | null>(null)
   const [seed, setSeed] = useState(() => Date.now())
   const [fileName, setFileName] = useState<string | null>(null)
   const [dragOver, setDragOver] = useState(false)
@@ -24,12 +28,12 @@ function App() {
     setError(null)
     try {
       const parsed = await parseCsvFile(file)
-      const suggested = suggestGroupCount(parsed.length)
+      const count = Math.min(DEFAULT_GROUP_COUNT, parsed.length)
       const newSeed = Date.now()
       setParticipants(parsed)
-      setGroupCount(suggested)
+      setGroupCount(count)
       setSeed(newSeed)
-      setGroups(createBalancedGroups(parsed, suggested, newSeed))
+      setGroups(createBalancedGroups(parsed, count, newSeed))
       setFileName(file.name)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Erreur lors de la lecture du fichier.')
@@ -66,6 +70,24 @@ function App() {
     setSeed(newSeed)
     setGroups(createBalancedGroups(participants, groupCount, newSeed))
   }, [participants, groupCount])
+
+  const moveMember = useCallback((participantId: number, targetGroupId: number) => {
+    setGroups((prev) => {
+      const source = prev.find((g) => g.members.some((m) => m.id === participantId))
+      if (!source || source.id === targetGroupId) return prev
+      const moved = source.members.find((m) => m.id === participantId)
+      if (!moved) return prev
+      return prev.map((g) => {
+        if (g.id === source.id) {
+          return { ...g, members: g.members.filter((m) => m.id !== participantId) }
+        }
+        if (g.id === targetGroupId) {
+          return { ...g, members: [...g.members, moved] }
+        }
+        return g
+      })
+    })
+  }, [])
 
   const onGroupCountChange = useCallback(
     (count: number) => {
@@ -207,13 +229,36 @@ function App() {
               </p>
             )}
 
-            <div className="mt-8 grid gap-5 sm:grid-cols-2">
+            <p className="mt-6 text-center text-xs text-slate-500">
+              💡 Glissez-déposez un participant d'un groupe à l'autre pour ajuster manuellement.
+            </p>
+
+            <div className="mt-4 grid gap-5 sm:grid-cols-2">
               {groups.map((group) => {
                 const total = group.members.reduce((s, p) => s + p.totalScore, 0)
                 return (
                   <article
                     key={group.id}
-                    className="rounded-xl border border-slate-700 bg-slate-800/40 p-5"
+                    onDragOver={(e) => {
+                      e.preventDefault()
+                      if (dragOverGroup !== group.id) setDragOverGroup(group.id)
+                    }}
+                    onDragLeave={(e) => {
+                      if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+                        setDragOverGroup((g) => (g === group.id ? null : g))
+                      }
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault()
+                      if (draggingId !== null) moveMember(draggingId, group.id)
+                      setDraggingId(null)
+                      setDragOverGroup(null)
+                    }}
+                    className={`rounded-xl border bg-slate-800/40 p-5 transition-colors ${
+                      dragOverGroup === group.id
+                        ? 'border-blue-400 bg-blue-500/10'
+                        : 'border-slate-700'
+                    }`}
                   >
                     <div className="mb-3 flex items-center justify-between">
                       <h2 className="text-lg font-semibold text-blue-300">Groupe {group.id}</h2>
@@ -225,9 +270,23 @@ function App() {
                       {group.members.map((p) => (
                         <li
                           key={p.id}
-                          className="flex items-center justify-between rounded-lg bg-slate-900/60 px-3 py-2 text-sm"
+                          draggable
+                          onDragStart={(e) => {
+                            setDraggingId(p.id)
+                            e.dataTransfer.effectAllowed = 'move'
+                          }}
+                          onDragEnd={() => {
+                            setDraggingId(null)
+                            setDragOverGroup(null)
+                          }}
+                          className={`flex cursor-grab items-center justify-between rounded-lg bg-slate-900/60 px-3 py-2 text-sm active:cursor-grabbing ${
+                            draggingId === p.id ? 'opacity-40' : ''
+                          }`}
                         >
-                          <span className="font-medium text-white">{p.name}</span>
+                          <span className="flex items-center gap-2 font-medium text-white">
+                            <span className="text-slate-500">⠿</span>
+                            {p.name}
+                          </span>
                           <span className="text-xs text-slate-400">
                             {p.age} ans · {p.totalScore.toFixed(1)} pts
                           </span>

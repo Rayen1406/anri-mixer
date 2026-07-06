@@ -1,11 +1,16 @@
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
 import type { Group } from './types'
+import { transliterateArabic } from './transliterate'
 
 export interface PdfOptions {
   includeScores?: boolean
   filename?: string
 }
+
+// jsPDF's built-in Arabic shaping is unreliable, so any Arabic in names or
+// venue labels is transliterated to Latin before it reaches the PDF.
+const tl = (v: string | number) => transliterateArabic(String(v ?? ''))
 
 export function downloadGroupsPdf(groups: Group[], options: PdfOptions = {}) {
   const { includeScores = false, filename = 'groupes-entretien.pdf' } = options
@@ -58,15 +63,18 @@ export function downloadGroupsPdf(groups: Group[], options: PdfOptions = {}) {
       autoTable(doc, {
         startY: y + 4,
         head: [['Nom', 'Âge', 'Maison', 'Élec.', 'Prog.', '3D', 'IA']],
-        body: group.members.map((p) => [
-          p.name,
-          String(p.age),
-          p.maison.length > 22 ? p.maison.slice(0, 20) + '…' : p.maison,
-          p.scores.electronics.toFixed(1),
-          p.scores.programming.toFixed(1),
-          p.scores.cad3d.toFixed(1),
-          p.scores.ai.toFixed(1),
-        ]),
+        body: group.members.map((p) => {
+          const maison = tl(p.maison)
+          return [
+            tl(p.name),
+            String(p.age),
+            maison.length > 22 ? maison.slice(0, 20) + '…' : maison,
+            p.scores.electronics.toFixed(1),
+            p.scores.programming.toFixed(1),
+            p.scores.cad3d.toFixed(1),
+            p.scores.ai.toFixed(1),
+          ]
+        }),
         foot: [[
           'Totaux',
           '',
@@ -86,11 +94,14 @@ export function downloadGroupsPdf(groups: Group[], options: PdfOptions = {}) {
       autoTable(doc, {
         startY: y + 4,
         head: [['Nom', 'Âge', 'Maison']],
-        body: group.members.map((p) => [
-          p.name,
-          String(p.age),
-          p.maison.length > 40 ? p.maison.slice(0, 38) + '…' : p.maison,
-        ]),
+        body: group.members.map((p) => {
+          const maison = tl(p.maison)
+          return [
+            tl(p.name),
+            String(p.age),
+            maison.length > 40 ? maison.slice(0, 38) + '…' : maison,
+          ]
+        }),
         theme: 'grid',
         headStyles: { fillColor: [30, 64, 120], fontSize: 10 },
         bodyStyles: { fontSize: 10 },

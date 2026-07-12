@@ -1,10 +1,20 @@
 import { useCallback, useMemo, useState } from 'react'
 import { parseCsvFile } from './lib/csvParser'
-import { createBalancedGroups } from './lib/grouping'
+import { createBalancedGroups, domainCoverage } from './lib/grouping'
 import { downloadGroupsPdf } from './lib/pdfExport'
 import type { Group, Participant } from './lib/types'
 
 const DEFAULT_GROUP_COUNT = 4
+
+const DOMAIN_LABELS: { key: 'electronics' | 'programming' | 'cad3d' | 'ai'; label: string }[] = [
+  { key: 'electronics', label: 'Élec.' },
+  { key: 'programming', label: 'Prog.' },
+  { key: 'cad3d', label: '3D' },
+  { key: 'ai', label: 'IA' },
+]
+
+// Gap (déclaré − mesuré, sur 10) au-delà duquel un candidat est signalé.
+const FLAG_THRESHOLD = 3
 
 function LogoMark({ size = 56 }: { size?: number }) {
   return (
@@ -39,6 +49,31 @@ function App() {
   const [dragOver, setDragOver] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [locked, setLocked] = useState<Set<number>>(new Set())
+
+  // Map each locked participant to the group they're currently pinned in, so a
+  // regenerate keeps them in place while re-optimizing everyone else.
+  const buildLockMap = useCallback(
+    (currentGroups: Group[]) => {
+      const map = new Map<number, number>()
+      for (const g of currentGroups) {
+        for (const m of g.members) {
+          if (locked.has(m.id)) map.set(m.id, g.id)
+        }
+      }
+      return map
+    },
+    [locked],
+  )
+
+  const toggleLock = useCallback((participantId: number) => {
+    setLocked((prev) => {
+      const next = new Set(prev)
+      if (next.has(participantId)) next.delete(participantId)
+      else next.add(participantId)
+      return next
+    })
+  }, [])
 
   const processFile = useCallback(async (file: File) => {
     if (!file.name.toLowerCase().endsWith('.csv')) {
@@ -55,6 +90,7 @@ function App() {
       setParticipants(parsed)
       setGroupCount(count)
       setSeed(newSeed)
+      setLocked(new Set())
       setGroups(createBalancedGroups(parsed, count, newSeed))
       setFileName(file.name)
     } catch (e) {
@@ -90,8 +126,10 @@ function App() {
     if (participants.length === 0) return
     const newSeed = Date.now()
     setSeed(newSeed)
-    setGroups(createBalancedGroups(participants, groupCount, newSeed))
-  }, [participants, groupCount])
+    setGroups((prev) =>
+      createBalancedGroups(participants, groupCount, newSeed, { locked: buildLockMap(prev) }),
+    )
+  }, [participants, groupCount, buildLockMap])
 
   const moveMember = useCallback((participantId: number, targetGroupId: number) => {
     setGroups((prev) => {
@@ -116,10 +154,12 @@ function App() {
       const clamped = Math.max(2, Math.min(count, participants.length || 20))
       setGroupCount(clamped)
       if (participants.length > 0) {
-        setGroups(createBalancedGroups(participants, clamped, seed))
+        setGroups((prev) =>
+          createBalancedGroups(participants, clamped, seed, { locked: buildLockMap(prev) }),
+        )
       }
     },
-    [participants, seed],
+    [participants, seed, buildLockMap],
   )
 
   const totalParticipants = participants.length
@@ -134,6 +174,18 @@ function App() {
       minTotal: Math.min(...totals).toFixed(1),
       maxTotal: Math.max(...totals).toFixed(1),
     }
+  }, [groups])
+
+  // Candidates whose declared level sits well above the measured one — to
+  // double-check in person. Sorted worst-first, tagged with their group.
+  const flagged = useMemo(() => {
+    const out: { p: Participant; groupId: number }[] = []
+    for (const g of groups) {
+      for (const m of g.members) {
+        if ((m.overclaim ?? 0) >= FLAG_THRESHOLD) out.push({ p: m, groupId: g.id })
+      }
+    }
+    return out.sort((a, b) => (b.p.overclaim ?? 0) - (a.p.overclaim ?? 0))
   }, [groups])
 
   return (
@@ -258,8 +310,50 @@ function App() {
             )}
 
             <p className="mt-6 text-center text-xs text-slate-500">
-              💡 Glissez-déposez un participant d'un groupe à l'autre pour ajuster manuellement.
+              💡 Glissez-déposez un participant d'un groupe à l'autre pour ajuster. Verrouillez (🔒)
+              ceux à garder en place avant de remélanger. Les puces de couleur indiquent la couverture
+              des compétences (Élec., Prog., 3D, IA) — une puce rouge signale un domaine sans profil confirmé.
             </p>
+
+            {flagged.length > 0 && (
+              <section className="mt-6 rounded-xl border border-orange-500/40 bg-orange-500/5 p-5">
+                <h2 className="mb-1 flex items-center gap-2 text-base font-semibold text-orange-300">
+                  ⚠ À vérifier en entretien
+                  <span className="rounded-full bg-orange-500/20 px-2 py-0.5 text-xs">{flagged.length}</span>
+                </h2>
+                <p className="mb-3 text-xs text-slate-400">
+                  Niveau déclaré nettement au-dessus du niveau mesuré par les questions. À creuser en personne.
+                </p>
+                <ul className="space-y-2">
+                  {flagged.map(({ p, groupId }) => (
+                    <li
+                      key={p.id}
+                      className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-slate-900/50 px-3 py-2 text-sm"
+                    >
+                      <span className="font-medium text-white">
+                        {p.name}
+                        <span className="ml-2 text-xs text-slate-500">Groupe {groupId} · {p.maison}</span>
+                      </span>
+                      <span className="flex flex-wrap gap-1.5">
+                        {DOMAIN_LABELS.map(({ key, label }) => {
+                          const gap = p.overclaimByDomain?.[key] ?? 0
+                          if (gap < FLAG_THRESHOLD) return null
+                          return (
+                            <span
+                              key={key}
+                              title={`${label} : écart déclaré − mesuré de ${gap.toFixed(0)}/10`}
+                              className="rounded bg-orange-500/15 px-2 py-0.5 text-xs font-medium text-orange-200"
+                            >
+                              {label} écart {gap.toFixed(0)}
+                            </span>
+                          )
+                        })}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
 
             <div className="mt-4 grid gap-5 sm:grid-cols-2">
               {groups.map((group) => {
@@ -294,32 +388,89 @@ function App() {
                         {group.members.length} · score {total.toFixed(1)}
                       </span>
                     </div>
+
+                    {(() => {
+                      const cov = domainCoverage(group)
+                      return (
+                        <div className="mb-3 flex flex-wrap gap-1.5">
+                          {DOMAIN_LABELS.map(({ key, label }) => {
+                            const n = cov[key]
+                            const missing = n === 0
+                            return (
+                              <span
+                                key={key}
+                                title={
+                                  missing
+                                    ? `Aucun profil confirmé en ${label}`
+                                    : `${n} profil(s) confirmé(s) en ${label}`
+                                }
+                                className={`rounded-md px-2 py-0.5 text-xs font-medium ${
+                                  missing
+                                    ? 'bg-red-500/15 text-red-300 ring-1 ring-red-500/40'
+                                    : 'bg-emerald-500/10 text-emerald-300'
+                                }`}
+                              >
+                                {missing ? '⚠ ' : ''}
+                                {label} {n}
+                              </span>
+                            )
+                          })}
+                        </div>
+                      )
+                    })()}
+
                     <ul className="space-y-2">
-                      {group.members.map((p) => (
-                        <li
-                          key={p.id}
-                          draggable
-                          onDragStart={(e) => {
-                            setDraggingId(p.id)
-                            e.dataTransfer.effectAllowed = 'move'
-                          }}
-                          onDragEnd={() => {
-                            setDraggingId(null)
-                            setDragOverGroup(null)
-                          }}
-                          className={`flex cursor-grab items-center justify-between rounded-lg bg-slate-900/60 px-3 py-2 text-sm active:cursor-grabbing ${
-                            draggingId === p.id ? 'opacity-40' : ''
-                          }`}
-                        >
-                          <span className="flex items-center gap-2 font-medium text-white">
-                            <span className="text-slate-500">⠿</span>
-                            {p.name}
-                          </span>
-                          <span className="text-xs text-slate-400">
-                            {p.age} ans · {p.totalScore.toFixed(1)} pts
-                          </span>
-                        </li>
-                      ))}
+                      {group.members.map((p) => {
+                        const isLocked = locked.has(p.id)
+                        return (
+                          <li
+                            key={p.id}
+                            draggable={!isLocked}
+                            onDragStart={(e) => {
+                              if (isLocked) {
+                                e.preventDefault()
+                                return
+                              }
+                              setDraggingId(p.id)
+                              e.dataTransfer.effectAllowed = 'move'
+                            }}
+                            onDragEnd={() => {
+                              setDraggingId(null)
+                              setDragOverGroup(null)
+                            }}
+                            className={`flex items-center justify-between rounded-lg bg-slate-900/60 px-3 py-2 text-sm ${
+                              isLocked ? 'ring-1 ring-amber-500/40' : 'cursor-grab active:cursor-grabbing'
+                            } ${draggingId === p.id ? 'opacity-40' : ''}`}
+                          >
+                            <span className="flex items-center gap-2 font-medium text-white">
+                              <span className="text-slate-500">⠿</span>
+                              {p.name}
+                            </span>
+                            <span className="flex items-center gap-2 text-xs text-slate-400">
+                              {p.overclaim !== undefined && p.overclaim >= 3 && (
+                                <span
+                                  title={`Niveau déclaré nettement au-dessus du niveau mesuré (écart ${p.overclaim.toFixed(0)}/10). À vérifier en entretien.`}
+                                  className="rounded bg-orange-500/20 px-1.5 py-0.5 font-medium text-orange-300"
+                                >
+                                  ⚠ à vérifier
+                                </span>
+                              )}
+                              {p.age} ans · {p.totalScore.toFixed(1)} pts
+                              <button
+                                type="button"
+                                onClick={() => toggleLock(p.id)}
+                                title={isLocked ? 'Déverrouiller (peut être déplacé)' : 'Verrouiller dans ce groupe'}
+                                aria-label={isLocked ? 'Déverrouiller' : 'Verrouiller'}
+                                className={`rounded px-1 py-0.5 transition ${
+                                  isLocked ? 'text-amber-400' : 'text-slate-600 hover:text-slate-300'
+                                }`}
+                              >
+                                {isLocked ? '🔒' : '🔓'}
+                              </button>
+                            </span>
+                          </li>
+                        )
+                      })}
                     </ul>
                   </article>
                 )

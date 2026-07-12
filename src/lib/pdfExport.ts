@@ -1,6 +1,7 @@
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
 import type { Group } from './types'
+import { domainCoverage } from './grouping'
 import { transliterateArabic } from './transliterate'
 
 export interface PdfOptions {
@@ -47,7 +48,28 @@ export function downloadGroupsPdf(groups: Group[], options: PdfOptions = {}) {
     doc.setFontSize(13)
     doc.setFont('helvetica', 'bold')
     doc.text(`Groupe ${group.id}  (${group.members.length} candidats)`, 14, y)
-    y += 2
+    y += 5
+
+    // Skill coverage line: how many capable profiles per domain (⚠ if none).
+    const cov = domainCoverage(group)
+    const covParts = [
+      `Élec. ${cov.electronics}`,
+      `Prog. ${cov.programming}`,
+      `3D ${cov.cad3d}`,
+      `IA ${cov.ai}`,
+    ]
+    const gaps = Object.values(cov).filter((n) => n === 0).length
+    doc.setFontSize(9)
+    doc.setFont('helvetica', 'normal')
+    if (gaps > 0) doc.setTextColor(190, 60, 60)
+    else doc.setTextColor(110, 110, 110)
+    doc.text(
+      `Couverture: ${covParts.join('  ·  ')}${gaps > 0 ? '   ⚠ domaine(s) non couvert(s)' : ''}`,
+      14,
+      y,
+    )
+    doc.setTextColor(0)
+    y -= 3
 
     if (includeScores) {
       const stats = group.members.reduce(
@@ -65,8 +87,9 @@ export function downloadGroupsPdf(groups: Group[], options: PdfOptions = {}) {
         head: [['Nom', 'Âge', 'Maison', 'Élec.', 'Prog.', '3D', 'IA']],
         body: group.members.map((p) => {
           const maison = tl(p.maison)
+          const flag = p.overclaim !== undefined && p.overclaim >= 3 ? '  ⚠' : ''
           return [
-            tl(p.name),
+            tl(p.name) + flag,
             String(p.age),
             maison.length > 22 ? maison.slice(0, 20) + '…' : maison,
             p.scores.electronics.toFixed(1),
@@ -120,7 +143,9 @@ export function downloadGroupsPdf(groups: Group[], options: PdfOptions = {}) {
   doc.setFontSize(8)
   doc.setTextColor(120)
   doc.text(
-    'Groupes équilibrés automatiquement (compétences, âge et profils mixtes).',
+    includeScores
+      ? '⚠ = niveau déclaré nettement au-dessus du niveau mesuré (à vérifier en entretien). Groupes équilibrés automatiquement.'
+      : 'Groupes équilibrés automatiquement (compétences, âge et profils mixtes).',
     pageWidth / 2,
     doc.internal.pageSize.getHeight() - 10,
     { align: 'center' },
